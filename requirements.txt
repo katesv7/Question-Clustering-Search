@@ -1,0 +1,11 @@
+pandas
+numpy
+scikit-learn
+tqdm
+sentence-transformers
+matplotlib
+seaborn
+umap-learn
+streamlit
+pytest
+beautifulsoup4
