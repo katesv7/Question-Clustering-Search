@@ -1,52 +1,44 @@
-import argparse
-import numpy as np
-import pandas as pd
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from utils import load_embeddings, load_questions, load_model, clean_text
+import os
+from clustered_retriever import ClusteredRetriever
 
-def search(query, mode, model_name, k, embeddings_path, questions_path, answer_map_path, cluster_only=False):
-    model = load_model(model_name)
-    query_clean = clean_text(query)
-    query_vec = model.encode([query_clean], normalize_embeddings=True)
 
-    all_embeddings = load_embeddings(embeddings_path)
-    all_questions = load_questions(questions_path)
-    answer_map = pd.read_csv(answer_map_path)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
 
-    sims = cosine_similarity(query_vec, all_embeddings)[0]
-    top_idx = np.argsort(sims)[-k:][::-1]
 
-    print(f"\nРезультаты для запроса: '{query}'\n")
-    for rank, idx in enumerate(top_idx, 1):
-        q = all_questions[idx]
-        a_row = answer_map[answer_map["question"] == q]
-        a = a_row["answer"].iloc[0] if not a_row.empty else "(ответ не найден)"
-        print(f"{rank}. {q}\n   💬 {a}\n   📏 Similarity: {sims[idx]:.4f}\n")
+retriever = ClusteredRetriever(
+    model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+    full_embeddings_path=os.path.join(DATA_DIR, "train_embeddings.npy"),
+    full_questions_path=os.path.join(DATA_DIR, "train_questions.csv"),
+    answer_map_path=os.path.join(DATA_DIR, "answer_map.csv"),
+    cluster_embeddings_path=os.path.join(DATA_DIR, "representative_train_embeddings.npy"),
+    cluster_questions_path=os.path.join(DATA_DIR, "representative_train_questions.csv")
+)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Поиск похожих вопросов")
-    parser.add_argument("--query", type=str, required=True, help="Текст запроса")
-    parser.add_argument("--mode", type=str, choices=["full", "clustered"], default="clustered", help="Поиск по всей базе или центрам")
-    parser.add_argument("--model", type=str, default="intfloat/multilingual-e5-base", help="Модель эмбеддинга")
-    parser.add_argument("--k", type=int, default=5, help="Сколько результатов возвращать")
+print("Поиск готов. Введите вопрос (или 'exit').")
 
-    parser.add_argument("--embeddings", type=str,
-        default="data/processed/question_embeddings.npy")
-    parser.add_argument("--questions", type=str,
-        default="data/processed/question_texts.txt")
-    parser.add_argument("--answer_map", type=str,
-        default="data/processed/answer_map.csv")
+while True:
+    query = input("\nВопрос: ").strip()
+    if query.lower() == "exit":
+        break
 
-    args = parser.parse_args()
 
-    search(
-        query=args.query,
-        mode=args.mode,
-        model_name=args.model,
-        k=args.k,
-        embeddings_path=args.embeddings,
-        questions_path=args.questions,
-        answer_map_path=args.answer_map,
-        cluster_only=(args.mode == "clustered")
-    )
+    full_results = retriever.retrieve(query, top_k=1, mode="full")[0]
+    clustered_results = retriever.retrieve(query, top_k=1, mode="clustered")[0]
+    print("\n=== Сравнение FULL vs CLUSTERED ===\n")
+
+    print("FULL:")
+    print(f"   Вопрос: {full_results['question']}")
+    print(f"   Ответ:  {full_results['answer']}")
+    print(f"   Сходство: {full_results['score']:.4f}")
+
+    print("\nCLUSTERED:")
+    print(f"   Вопрос: {clustered_results['question']}")
+    print(f"   Ответ:  {clustered_results['answer']}")
+    print(f"   Сходство: {clustered_results['score']:.4f}")
+
+    delta = full_results['score'] - clustered_results['score']
+    same_answer = full_results['answer'].strip().lower() == clustered_results['answer'].strip().lower()
+
+    print(f"\nРазница в similarity (full - clustered): {delta:+.4f}")
+    print(f"Совпадение ответов: {'Да' if same_answer else 'Нет'}")
