@@ -1,24 +1,26 @@
 import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
-import argparse
 import matplotlib.pyplot as plt
 import seaborn as sns
 import time
+import os
+
 
 def load_data(embeddings_path, cluster_file, reps_file):
     embeddings = np.load(embeddings_path)
     df_clusters = pd.read_csv(cluster_file)
     df_clusters = df_clusters[df_clusters["cluster"] != -1].reset_index(drop=True)
     df_reps = pd.read_csv(reps_file)
+
     return embeddings, df_clusters, df_reps
+
 
 def run_simulation(embeddings, df_clusters, df_reps, top_k=5):
     questions = df_clusters["question"].tolist()
     clusters = df_clusters["cluster"].tolist()
     valid_idx = df_clusters.index.tolist()
     full_embeddings = embeddings[valid_idx]
-
     rep_q_to_cluster = {}
     rep_questions = []
 
@@ -39,7 +41,7 @@ def run_simulation(embeddings, df_clusters, df_reps, top_k=5):
 
     rep_embeddings = np.stack(rep_embeddings)
 
-    print(f"Полные: {len(full_embeddings)} | Центров: {len(rep_embeddings)}")
+    print(f"Полных вопросов: {len(full_embeddings)} | Центров: {len(rep_embeddings)}")
 
     t0 = time.time()
     full_sim = cosine_similarity(full_embeddings)
@@ -53,16 +55,13 @@ def run_simulation(embeddings, df_clusters, df_reps, top_k=5):
     for i in range(len(full_embeddings)):
         q = questions[i]
         c_true = clusters[i]
-
         s_full = full_sim[i]
-        best_full_idx = np.argsort(s_full)[-2]  
+        best_full_idx = np.argsort(s_full)[-2]
         score_full = s_full[best_full_idx]
-
         s_centers = center_sim[i]
         top_k_idx = np.argsort(s_centers)[-top_k:][::-1]
         score_center = s_centers[top_k_idx[0]]
         pred_cluster = rep_clusters[top_k_idx[0]]
-
         precision_at_1 = int(pred_cluster == c_true)
         recall_at_k = int(c_true in [rep_clusters[j] for j in top_k_idx])
 
@@ -76,7 +75,8 @@ def run_simulation(embeddings, df_clusters, df_reps, top_k=5):
 
     return pd.DataFrame(results), t_full, t_center
 
-def analyze(df, t_full, t_center, top_k):
+
+def analyze(df, t_full, t_center, top_k, save_path=None):
     print("\nScore diff:")
     print(df["score_diff"].describe())
 
@@ -85,25 +85,34 @@ def analyze(df, t_full, t_center, top_k):
 
     print(f"\nprecision@1: {p1:.3f}")
     print(f"recall@{top_k}: {r_k:.3f}")
-    print(f"\nПоиск по всем вопросам: {t_full:.2f} сек")
-    print(f"Поиск по центрам: {t_center:.2f} сек (ускорение ×{t_full / t_center:.1f})")
+    print(f"\nВремя поиска по всем: {t_full:.2f} сек")
+    print(f"Время по центрам: {t_center:.2f} сек (ускорение ×{t_full / t_center:.1f})")
+
 
     plt.figure(figsize=(8, 4))
     sns.histplot(df["score_diff"], bins=30, kde=True, color="skyblue")
-    plt.title("Разница score (полный vs центры)")
+    plt.title("Разница score (все vs центры)")
     plt.xlabel("abs(score_full - score_center)")
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=200)
+        print(f"График сохранен в: {save_path}")
+    else:
+        plt.show()
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--embeddings", required=True)
-    parser.add_argument("--clusters", required=True)
-    parser.add_argument("--representatives", required=True)
-    parser.add_argument("--top_k", type=int, default=5)
-    args = parser.parse_args()
 
-    emb, df_c, df_r = load_data(args.embeddings, args.clusters, args.representatives)
-    df_res, t1, t2 = run_simulation(emb, df_c, df_r, top_k=args.top_k)
-    analyze(df_res, t1, t2, top_k=args.top_k)
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    EMBEDDINGS_PATH = os.path.join(BASE_DIR, "data", "processed", "train_embeddings.npy")
+    CLUSTERS_CSV = os.path.join(BASE_DIR, "data", "processed", "clustered_train_questions.csv")
+    REPS_CSV = os.path.join(BASE_DIR, "data", "processed", "representative_train_questions.csv")
+    PLOT_SAVE_PATH = os.path.join(BASE_DIR, "figures", "score_diff_hist_train.png")
+    TOP_K = 5
+
+    emb, df_c, df_r = load_data(EMBEDDINGS_PATH, CLUSTERS_CSV, REPS_CSV)
+    df_res, t1, t2 = run_simulation(emb, df_c, df_r, top_k=TOP_K)
+    analyze(df_res, t1, t2, top_k=TOP_K, save_path=PLOT_SAVE_PATH)
