@@ -1,19 +1,26 @@
 import os
-import pandas as pd
 import numpy as np
+import pandas as pd
 from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
-import argparse
+from sklearn.model_selection import train_test_split
+from sentence_transformers import SentenceTransformer
+from src.utils import get_custom_encoder_path
 
-DEFAULT_INPUT = "data/processed/questions_answers_augmented.csv"
-DEFAULT_EMBEDDINGS_OUT = "data/processed/question_embeddings.npy"
-DEFAULT_TEXTS_OUT = "data/processed/question_texts.txt"
-DEFAULT_ANSWER_MAP = "data/processed/answer_map.csv"
-DEFAULT_MODEL = "intfloat/multilingual-e5-base"
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+QA_FILE_CLEAN = os.path.join(BASE_DIR, "data", "processed", "questions_answers_clean.csv")
+QA_FILE_AUG = os.path.join(BASE_DIR, "data", "processed", "questions_answers_augmented.csv")
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "processed")
+# MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+MODEL_NAME = get_custom_encoder_path("custom_encoder_kaggle")
+TEST_SIZE = 0.2
+RANDOM_SEED = 42
 NORMALIZE_EMBEDDINGS = True
+
 
 def encode_questions(model_name, questions, normalize=True):
     print(f"Загружаем модель: {model_name}")
+    # model = SentenceTransformer(model_name)
     model = SentenceTransformer(model_name)
 
     print(f"Кодируем {len(questions)} вопросов...")
@@ -27,40 +34,49 @@ def encode_questions(model_name, questions, normalize=True):
 
     norms = np.linalg.norm(embeddings, axis=1)
     print(f"Средняя норма векторов: {np.mean(norms):.4f}")
-
     return embeddings
 
-def run(input_path, emb_out_path, txt_out_path, map_out_path, model_name):
-    df = pd.read_csv(input_path)
-    print(f"Всего строк: {len(df)}")
+
+def main():
+    if os.path.exists(QA_FILE_AUG):
+        source_file = QA_FILE_AUG
+    elif os.path.exists(QA_FILE_CLEAN):
+        source_file = QA_FILE_CLEAN
+    else:
+        raise FileNotFoundError("Не найден ни один файл: questions_answers_clean.csv или questions_answers_augmented.csv")
+
+    print(f"Используем файл: {source_file}")
+    df = pd.read_csv(source_file)
+
+    if "answer" not in df.columns or "question" not in df.columns:
+        raise ValueError("Файл должен содержать колонки 'question' и 'answer'")
 
     df = df.dropna(subset=["question", "answer"]).drop_duplicates()
-
     questions = df["question"].tolist()
     answers = df["answer"].tolist()
 
-    print(f"Уникальных вопросов: {len(set(questions))} / {len(questions)}")
-    
-    embeddings = encode_questions(model_name, questions, normalize=NORMALIZE_EMBEDDINGS)
+    print(f"Загружено уникальных вопросов: {len(set(questions))}")
 
-    os.makedirs(os.path.dirname(emb_out_path), exist_ok=True)
-    np.save(emb_out_path, embeddings)
+    train_q, test_q = train_test_split(questions, test_size=TEST_SIZE, random_state=RANDOM_SEED)
+    pd.DataFrame({"question": train_q}).to_csv(os.path.join(OUTPUT_DIR, "train_questions_custom_encoder.csv"), index=False)
+    pd.DataFrame({"question": test_q}).to_csv(os.path.join(OUTPUT_DIR, "test_questions_custom_encoder.csv"), index=False)
+    train_embeddings = encode_questions(MODEL_NAME, train_q, normalize=NORMALIZE_EMBEDDINGS)
+    test_embeddings = encode_questions(MODEL_NAME, test_q, normalize=NORMALIZE_EMBEDDINGS)
+    np.save(os.path.join(OUTPUT_DIR, "train_embeddings_custom_encoder.npy"), train_embeddings)
+    np.save(os.path.join(OUTPUT_DIR, "test_embeddings_custom_encoder.npy"), test_embeddings)
 
-    with open(txt_out_path, "w", encoding="utf-8") as f:
-        for q in questions:
+    with open(os.path.join(OUTPUT_DIR, "question_texts_custom_encoder.txt"), "w", encoding="utf-8") as f:
+        for q in train_q + test_q:
             f.write(q.strip() + "\n")
 
-    pd.DataFrame({"question": questions, "answer": answers}).to_csv(map_out_path, index=False, encoding="utf-8-sig")
+    answer_map = df[df["question"].isin(train_q + test_q)][["question", "answer"]]
+    answer_map.to_csv(os.path.join(OUTPUT_DIR, "answer_map_custom_encoder.csv"), index=False, encoding="utf-8-sig")
 
-    print(f"Сохранено:\n– embeddings: {emb_out_path}\n– texts: {txt_out_path}\n– map: {map_out_path}")
+    print("\nВсё сохранено:")
+    print("train_questions.csv + test_questions.csv")
+    print("train_embeddings.npy + test_embeddings.npy")
+    print("answer_map.csv")
+    print("question_texts.txt")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Encode questions into embeddings with mapping.")
-    parser.add_argument("--input", type=str, default=DEFAULT_INPUT, help="CSV with columns [question, answer]")
-    parser.add_argument("--embeddings", type=str, default=DEFAULT_EMBEDDINGS_OUT, help="Path to save .npy")
-    parser.add_argument("--texts", type=str, default=DEFAULT_TEXTS_OUT, help="Path to save .txt")
-    parser.add_argument("--mapping", type=str, default=DEFAULT_ANSWER_MAP, help="Path to save question-answer map")
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="HuggingFace model name")
-
-    args = parser.parse_args()
-    run(args.input, args.embeddings, args.texts, args.mapping, args.model)
+    main()
