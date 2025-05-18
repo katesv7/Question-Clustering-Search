@@ -1,10 +1,119 @@
+# import os
+# import numpy as np
+# import pandas as pd
+# from sklearn.metrics.pairwise import cosine_similarity
+#
+# # === Центр кластера === #
+# def get_cluster_center(embeddings, method="mean"):
+#     if method == "mean":
+#         return np.mean(embeddings, axis=0)
+#     elif method == "median":
+#         return np.median(embeddings, axis=0)
+#     else:
+#         raise ValueError("Метод центра должен быть 'mean' или 'median'")
+#
+# # === Топ-K ближайших вопросов к центру === #
+# def find_top_k_representatives(questions, embeddings, center, top_k=1):
+#     sims = cosine_similarity([center], embeddings)[0]
+#     top_idx = np.argsort(sims)[-top_k:][::-1]
+#     return [questions[i] for i in top_idx], [embeddings[i] for i in top_idx]
+#
+# # === Обработка одного набора (train/test) === #
+# def select_representatives(split="train", center_method="mean", top_k=1):
+#     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#     data_dir = os.path.join(BASE_DIR, "data", "processed")
+#
+#     cluster_file = os.path.join(data_dir, f"clustered_{split}_questions.csv")
+#     embeddings_path = os.path.join(data_dir, f"{split}_embeddings.npy")
+#     output_csv = os.path.join(data_dir, f"representative_{split}_questions.csv")
+#     output_txt = os.path.join(data_dir, f"representative_{split}_questions.txt")
+#     output_npy = os.path.join(data_dir, f"representative_{split}_embeddings.npy")
+#     output_centers = os.path.join(data_dir, f"cluster_centers_{split}.npy")
+#     dummy_names_path = os.path.join(data_dir, f"cluster_center_names_{split}.csv")
+#
+#     print(f"\n📂 Обработка: {split.upper()} (method: {center_method}, top_k={top_k})")
+#
+#     df = pd.read_csv(cluster_file)
+#     embeddings = np.load(embeddings_path)
+#
+#     if len(df) != len(embeddings):
+#         raise ValueError("❌ Размерность эмбеддингов не совпадает с количеством вопросов")
+#
+#     df["embedding_index"] = df.index
+#     df = df[df["cluster"] != -1]
+#
+#     representatives = []
+#     all_rep_embeddings = []
+#     rep_questions_all = []
+#     cluster_centers = []
+#
+#     for cluster_id, group in df.groupby("cluster"):
+#         idxs = group["embedding_index"].values
+#         cluster_embeddings = embeddings[idxs]
+#         cluster_questions = group["question"].tolist()
+#
+#         center = get_cluster_center(cluster_embeddings, method=center_method)
+#         cluster_centers.append(center)
+#
+#         top_questions, top_embeddings = find_top_k_representatives(
+#             cluster_questions, cluster_embeddings, center, top_k=top_k
+#         )
+#
+#         representatives.append({
+#             "cluster": cluster_id,
+#             "representative_question": "; ".join(top_questions),
+#             "size": len(group)
+#         })
+#         all_rep_embeddings.extend(top_embeddings)
+#         rep_questions_all.extend(top_questions)
+#
+#     # === Сохраняем всё === #
+#     os.makedirs(data_dir, exist_ok=True)
+#
+#     # 1. CSV таблицу с вопросами
+#     df_result = pd.DataFrame(representatives)
+#     df_result.to_csv(output_csv, index=False, encoding="utf-8-sig")
+#
+#     # 2. TXT список репрезентативных вопросов
+#     with open(output_txt, "w", encoding="utf-8") as f:
+#         for q in rep_questions_all:
+#             f.write(q.strip() + "\n")
+#
+#     # 3. NPY эмбеддинги вопросов-центров
+#     np.save(output_npy, np.array(all_rep_embeddings))
+#
+#     # 4. NPY средние векторы кластеров
+#     np.save(output_centers, np.array(cluster_centers))
+#
+#     # 5. Заглушки для кластерных центров
+#     dummy_names = [f"center_{i}" for i in range(len(cluster_centers))]
+#     pd.DataFrame({"question": dummy_names}).to_csv(dummy_names_path, index=False)
+#
+#     print(f"✅ Сохранено для split='{split}':")
+#     print(f"📄 CSV с вопросами кластеров: {output_csv}")
+#     print(f"📝 TXT репрезентативные вопросы: {output_txt}")
+#     print(f"💾 NPY embeddings (вопросы): {output_npy}")
+#     print(f"💾 NPY cluster centers (mean): {output_centers}")
+#     print(f"📄 CSV dummy имена центров: {dummy_names_path}")
+#
+#     return {
+#         "questions_csv": output_csv,
+#         "questions_txt": output_txt,
+#         "embeddings_npy": output_npy,
+#         "centers_npy": output_centers,
+#         "dummy_names_csv": dummy_names_path
+#     }
+#
+# # === Обрабатываем и train и test без CLI ===
+# if __name__ == "__main__":
+#     for split in ["train", "test"]:
+#         select_representatives(split=split, center_method="mean", top_k=1)
+
+import os
 import numpy as np
 import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
-import argparse
-import os
-import matplotlib.pyplot as plt
-import umap
+
 
 def get_cluster_center(embeddings, method="mean"):
     if method == "mean":
@@ -14,35 +123,26 @@ def get_cluster_center(embeddings, method="mean"):
     else:
         raise ValueError("Метод центра должен быть 'mean' или 'median'")
 
+
 def find_top_k_representatives(questions, embeddings, center, top_k=1):
     sims = cosine_similarity([center], embeddings)[0]
     top_idx = np.argsort(sims)[-top_k:][::-1]
-    return [questions[i] for i in top_idx]
-
-def visualize_clusters(df, embeddings, output_path="data/processed/umap_clusters.png"):
-    reducer = umap.UMAP(n_components=2, random_state=42)
-    X_2d = reducer.fit_transform(embeddings)
-
-    df_vis = df.copy()
-    df_vis["x"] = X_2d[:, 0]
-    df_vis["y"] = X_2d[:, 1]
-
-    plt.figure(figsize=(10, 6))
-    scatter = plt.scatter(df_vis["x"], df_vis["y"], c=df_vis["cluster"], cmap="tab20", s=8, alpha=0.6)
-    plt.title("Кластеры вопросов (UMAP проекция)")
-    plt.xlabel("UMAP-1")
-    plt.ylabel("UMAP-2")
-    plt.colorbar(scatter, label="Cluster ID")
-    plt.grid(True)
-    plt.tight_layout()
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=200)
-    plt.close()
-    print(f"Визуализация сохранена: {output_path}")
+    return [questions[i] for i in top_idx], [embeddings[i] for i in top_idx]
 
 
-def run(cluster_file, embeddings_path, output_file, center_method="mean", top_k=1, plot=True):
+def select_representatives(split="train", center_method="mean", top_k=1):
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(BASE_DIR, "data", "processed")
+    cluster_file = os.path.join(data_dir, f"clustered_{split}_questions_custom_encoder.csv")
+    embeddings_path = os.path.join(data_dir, f"{split}_embeddings_custom_encoder.npy")
+    output_csv = os.path.join(data_dir, f"representative_{split}_questions_custom_encoder.csv")
+    output_txt = os.path.join(data_dir, f"representative_{split}_questions_custom_encoder.txt")
+    output_npy = os.path.join(data_dir, f"representative_{split}_embeddings_custom_encoder.npy")
+    output_centers = os.path.join(data_dir, f"cluster_centers_{split}_custom_encoder.npy")
+    dummy_names_path = os.path.join(data_dir, f"cluster_center_names_{split}_custom_encoder.csv")
+
+    print(f"\nОбработка: {split.upper()} (method: {center_method}, top_k={top_k})")
+
     df = pd.read_csv(cluster_file)
     embeddings = np.load(embeddings_path)
 
@@ -53,45 +153,60 @@ def run(cluster_file, embeddings_path, output_file, center_method="mean", top_k=
     df = df[df["cluster"] != -1]
 
     representatives = []
+    all_rep_embeddings = []
+    rep_questions_all = []
+    cluster_centers = []
+
     for cluster_id, group in df.groupby("cluster"):
         idxs = group["embedding_index"].values
         cluster_embeddings = embeddings[idxs]
         cluster_questions = group["question"].tolist()
 
         center = get_cluster_center(cluster_embeddings, method=center_method)
-        top_questions = find_top_k_representatives(cluster_questions, cluster_embeddings, center, top_k=top_k)
+        cluster_centers.append(center)
+
+        top_questions, top_embeddings = find_top_k_representatives(
+            cluster_questions, cluster_embeddings, center, top_k=top_k
+        )
 
         representatives.append({
             "cluster": cluster_id,
             "representative_question": "; ".join(top_questions),
             "size": len(group)
         })
+        all_rep_embeddings.extend(top_embeddings)
+        rep_questions_all.extend(top_questions)
 
+
+    os.makedirs(data_dir, exist_ok=True)
     df_result = pd.DataFrame(representatives)
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    df_result.to_csv(output_file, index=False, encoding="utf-8-sig")
-    print(f"Репрезентативные вопросы сохранены: {output_file}")
-    print(df_result.head())
+    df_result.to_csv(output_csv, index=False, encoding="utf-8-sig")
 
-    if plot:
-        visualize_clusters(df, embeddings)
+    with open(output_txt, "w", encoding="utf-8") as f:
+        for q in rep_questions_all:
+            f.write(q.strip() + "\n")
+
+    np.save(output_npy, np.array(all_rep_embeddings))
+    np.save(output_centers, np.array(cluster_centers))
+    dummy_names = [f"center_{i}" for i in range(len(cluster_centers))]
+    pd.DataFrame({"question": dummy_names}).to_csv(dummy_names_path, index=False)
+
+    print(f"Сохранено для split='{split}':")
+    print(f"CSV с вопросами кластеров: {output_csv}")
+    print(f"TXT репрезентативные вопросы: {output_txt}")
+    print(f"NPY embeddings (вопросы): {output_npy}")
+    print(f"NPY cluster centers (mean): {output_centers}")
+    print(f"CSV dummy имена центров: {dummy_names_path}")
+
+    return {
+        "questions_csv": output_csv,
+        "questions_txt": output_txt,
+        "embeddings_npy": output_npy,
+        "centers_npy": output_centers,
+        "dummy_names_csv": dummy_names_path
+    }
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Enhanced representative question selection")
-    parser.add_argument("--clusters", type=str, required=True, help="Path to clustered_questions.csv")
-    parser.add_argument("--embeddings", type=str, required=True, help="Path to question_embeddings.npy")
-    parser.add_argument("--output", type=str, default="data/processed/representative_questions.csv")
-    parser.add_argument("--center_method", type=str, default="mean", choices=["mean", "median"])
-    parser.add_argument("--top_k", type=int, default=1, help="How many representative questions per cluster")
-    parser.add_argument("--no_plot", action="store_true", help="Disable UMAP visualization")
-
-    args = parser.parse_args()
-    run(
-        cluster_file=args.clusters,
-        embeddings_path=args.embeddings,
-        output_file=args.output,
-        center_method=args.center_method,
-        top_k=args.top_k,
-        plot=not args.no_plot
-    )
+    for split in ["train", "test"]:
+        select_representatives(split=split, center_method="mean", top_k=1)
